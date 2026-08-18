@@ -525,47 +525,15 @@ const definition = {
         const ep10 = device.getEndpoint(LED_ENDPOINT);
         const ep11 = device.getEndpoint(SCAN_ENDPOINT);
 
-        // EP2: custom M-Bus data cluster
-        if (ep2) {
-            try {
-                await reporting.bind(ep2, coordinatorEndpoint, [MBUS_CLUSTER_ID]);
-                console.log(`[MBUS03] Bound EP2 (${MBUS_CLUSTER})`);
-            } catch (error) {
-                console.log(`[MBUS03] Warning: Failed to bind EP2 ${MBUS_CLUSTER}: ${error.message}`);
-            }
-
-            // Report each float value (min 1s, max 300s, on any change)
-            for (const attr of valueAttrs) {
-                try {
-                    await ep2.configureReporting(MBUS_CLUSTER_ID, [
-                        {
-                            attribute: attr,
-                            minimumReportInterval: 1,
-                            maximumReportInterval: 300,
-                            reportableChange: 0,
-                        },
-                    ]);
-                } catch (error) {
-                    console.log(`[MBUS03] Warning: Failed to configure reporting for ${attr}: ${error.message}`);
-                }
-            }
-
-            // Report metadata (min 0s, max 1h, on any change)
-            for (const attr of [0x0100, 0x0101, 0x0102, 0x0103]) {
-                try {
-                    await ep2.configureReporting(MBUS_CLUSTER_ID, [
-                        {
-                            attribute: attr,
-                            minimumReportInterval: 0,
-                            maximumReportInterval: 3600,
-                            reportableChange: 0,
-                        },
-                    ]);
-                } catch (error) {
-                    console.log(`[MBUS03] Warning: Failed to configure reporting for ${attr}: ${error.message}`);
-                }
-            }
-        } else {
+        // EP2: custom M-Bus data cluster.
+        // CRITICAL: we do NOT bind or configure attribute reporting on this
+        // custom cluster. Sending Configure Reporting for the 0xFC00 attributes
+        // CRASHES the device - a Guru Meditation "load access fault" inside the
+        // ESP/ZBOSS zb_zcl_configure_reporting_handler / reporting timer. That
+        // crash-loop is what made devices appear stuck (never finishing a scan,
+        // device_count 0). All data is delivered by POLLING instead (readAllOnce
+        // on join + the periodic value/metadata poll).
+        if (!ep2) {
             console.log(`[MBUS03] Warning: EP2 (M-Bus data cluster) not present on this device`);
         }
 
