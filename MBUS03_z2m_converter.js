@@ -58,8 +58,13 @@ const SCAN_ENDPOINT = 11;
 // Number of M-Bus value/description slots
 const VALUE_COUNT = 16;
 
-// Poll interval for the (unreliable-to-report) CHAR_STRING descriptions
-const POLL_INTERVAL_MS = 60 * 1000;
+// Fallback poll interval for values + metadata (reporting is unreliable on weak
+// links / older z2m). Reports still give real-time updates where they work; this
+// just guarantees z2m stays fresh even when they don't.
+const POLL_INTERVAL_MS = 45 * 1000;
+
+// Auto-scan interval written to the firmware so it keeps rediscovering the meter.
+const SCAN_INTERVAL_S = 30;
 
 // Attribute name helpers
 // NUMERIC attribute IDs. z2m does not resolve this custom cluster's names at
@@ -206,6 +211,38 @@ async function refreshDescriptions(device) {
         await readChunked(ep2, MBUS_CLUSTER_ID, descAttrs, 1, 'descriptions');
     } finally {
         device.mbusDescRefreshing = false;
+    }
+}
+
+// Poll values + metadata (NOT descriptions - those are on-demand). This is a
+// fallback for environments where attribute reporting is unreliable: weak/marginal
+// links and older z2m (e.g. 2.9.x custom-cluster reporting bug). Reads are spaced
+// (in readChunked) so the poll never bursts. Descriptions stay on-demand.
+async function pollValuesMeta(device) {
+    const ep2 = device.getEndpoint(MBUS_ENDPOINT);
+    if (!ep2) {
+        return;
+    }
+    await readChunked(ep2, MBUS_CLUSTER_ID, valueAttrs, 4, 'poll-values');
+    await readChunked(ep2, MBUS_CLUSTER_ID, metaAttrs, 4, 'poll-metadata');
+}
+
+// Ask the firmware to scan the M-Bus so it (re)discovers the meter. Without a
+// scan the firmware reports device_count 0 / all values 0. Writing scanInterval
+// makes the firmware auto-scan; we also kick an immediate scan via EP11 genOnOff.
+async function ensureScanning(device) {
+    try {
+        const ep2 = device.getEndpoint(MBUS_ENDPOINT);
+        if (ep2) {
+            // Auto-scan every SCAN_INTERVAL_S seconds so the meter is kept fresh.
+            await ep2.write(MBUS_CLUSTER_ID, {0x0104: {value: SCAN_INTERVAL_S, type: Zcl.DataType.UINT8}});
+        }
+        const ep11 = device.getEndpoint(SCAN_ENDPOINT);
+        if (ep11) {
+            await ep11.command('genOnOff', 'on', {}, {});   // trigger one scan now
+        }
+    } catch (error) {
+        console.log(`[MBUS03] Warning: ensureScanning failed: ${error.message}`);
     }
 }
 
@@ -558,18 +595,19 @@ const definition = {
         }
 
         if (ep2) {
-            // One-time read to seed z2m with the current state. After this the
-            // device pushes value/metadata changes as reports, so we do NOT poll.
+            // Make sure the firmware is scanning the M-Bus (otherwise it reports
+            // device_count 0 / values 0), then seed z2m with the current state.
+            await ensureScanning(device);
             await readAllOnce(device);
         }
 
         console.log(`[MBUS03] Configuration complete. OTA updates available via EP10.`);
     },
 
-    // The device PUSHES value/metadata changes as attribute reports, so there is
-    // NO periodic polling. On (re)join we do a single read to seed z2m with the
-    // current state (reports only fire on change), and descriptions are refreshed
-    // on demand from fromZigbee when a new value appears without one.
+    // Data delivery is BELT-AND-SUSPENDERS: attribute reports give real-time
+    // updates where they work (strong link + recent z2m), and a spaced periodic
+    // poll of values+metadata guarantees freshness where reporting is unreliable
+    // (weak/marginal links, older z2m). Descriptions are read on join + on demand.
     //
     // NOTE: modern zigbee-herdsman-converters calls onEvent with a SINGLE event
     // object ({type, data}), not the legacy (type, data, device) argument list.
@@ -580,16 +618,36 @@ const definition = {
             return;
         }
 
+        const key = 'mbusPollInterval';
+
+        if (type === 'stop') {
+            if (device[key]) {
+                clearInterval(device[key]);
+                device[key] = undefined;
+            }
+            return;
+        }
+
         // Re-register the custom cluster on every lifecycle event so cluster
         // 0xFC00 always resolves to 'mbusData', including after converter reloads
         // where the 'start' event does not re-fire for an already-started device.
         ensureCustomCluster(device);
 
         if (type === 'start' || type === 'deviceAnnounce' || type === 'deviceInterview') {
-            // Seed current state once (spaced reads); then rely on reports.
-            readAllOnce(device).catch((err) => {
-                console.log(`[MBUS03] Initial state read failed: ${err.message}`);
-            });
+            // Kick the firmware into scanning + seed current state once.
+            ensureScanning(device)
+                .then(() => readAllOnce(device))
+                .catch((err) => console.log(`[MBUS03] Initial seed failed: ${err.message}`));
+
+            // Start the fallback value+metadata poll (guard against duplicates).
+            if (!device[key]) {
+                device[key] = setInterval(() => {
+                    pollValuesMeta(device).catch((err) => {
+                        console.log(`[MBUS03] Value poll failed: ${err.message}`);
+                    });
+                }, POLL_INTERVAL_MS);
+                console.log(`[MBUS03] Started value poll (${POLL_INTERVAL_MS / 1000}s)`);
+            }
         }
     },
 
