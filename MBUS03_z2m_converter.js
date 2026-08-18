@@ -227,24 +227,13 @@ async function pollValuesMeta(device) {
     await readChunked(ep2, MBUS_CLUSTER_ID, metaAttrs, 4, 'poll-metadata');
 }
 
-// Ask the firmware to scan the M-Bus so it (re)discovers the meter. Without a
-// scan the firmware reports device_count 0 / all values 0. Writing scanInterval
-// makes the firmware auto-scan; we also kick an immediate scan via EP11 genOnOff.
-async function ensureScanning(device) {
-    try {
-        const ep2 = device.getEndpoint(MBUS_ENDPOINT);
-        if (ep2) {
-            // Auto-scan every SCAN_INTERVAL_S seconds so the meter is kept fresh.
-            await ep2.write(MBUS_CLUSTER_ID, {0x0104: {value: SCAN_INTERVAL_S, type: Zcl.DataType.UINT8}});
-        }
-        const ep11 = device.getEndpoint(SCAN_ENDPOINT);
-        if (ep11) {
-            await ep11.command('genOnOff', 'on', {}, {});   // trigger one scan now
-        }
-    } catch (error) {
-        console.log(`[MBUS03] Warning: ensureScanning failed: ${error.message}`);
-    }
-}
+// NOTE: the converter must NOT trigger M-Bus scans. The firmware auto-scans on
+// its own (scan_interval default). An earlier version wrote scanInterval AND
+// pulsed EP11 genOnOff on every lifecycle event to "kick" a scan - but on a busy
+// mesh those events fire repeatedly, so the scan was constantly re-triggered and
+// never completed (stuck at ~14%, device_count 0). The converter only READS the
+// results; scanning is the firmware's job. The manual scan / scan_interval
+// controls (toZigbee) remain for explicit user action.
 
 const definition = {
     zigbeeModel: ['MBUS03', 'MBUS03 LYNXPOWER', 'MBUS03 LYNXPOWER'],
@@ -595,9 +584,7 @@ const definition = {
         }
 
         if (ep2) {
-            // Make sure the firmware is scanning the M-Bus (otherwise it reports
-            // device_count 0 / values 0), then seed z2m with the current state.
-            await ensureScanning(device);
+            // Seed z2m with the current state (the firmware scans on its own).
             await readAllOnce(device);
         }
 
@@ -634,10 +621,10 @@ const definition = {
         ensureCustomCluster(device);
 
         if (type === 'start' || type === 'deviceAnnounce' || type === 'deviceInterview') {
-            // Kick the firmware into scanning + seed current state once.
-            ensureScanning(device)
-                .then(() => readAllOnce(device))
-                .catch((err) => console.log(`[MBUS03] Initial seed failed: ${err.message}`));
+            // Seed current state once (the firmware scans on its own - we never
+            // trigger scans from here).
+            readAllOnce(device).catch((err) =>
+                console.log(`[MBUS03] Initial seed failed: ${err.message}`));
 
             // Start the fallback value+metadata poll (guard against duplicates).
             if (!device[key]) {
