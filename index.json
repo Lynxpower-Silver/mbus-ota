@@ -1,10 +1,10 @@
 [
   {
-    "fileVersion": 131085,
-    "fileSize": 700088,
+    "fileVersion": 131086,
+    "fileSize": 700392,
     "manufacturerCode": 4097,
     "imageType": 4097,
-    "sha512": "40497ddf0c061762f852328fea0d135a4bb806a2854a72b0100172ca1dec41724f3ccd0554480c2f1ae16a3ece80b4eb006ffb0aaa8be23e24dba6ade6ac914d",
-    "url": "https://github.com/Lynxpower-Silver/mbus-ota/releases/download/v0.2.13/MBUS03_v0.2.13.ota"
+    "sha512": "62b419242a6d8987d34fd60706c5106ce8d2d8bb8ed6760e4bfabf218b1cc2f8b84eb8bdd561058f694d18c4093ad59ff7c14e01973575525cb3c430c93f8235",
+    "url": "https://github.com/Lynxpower-Silver/mbus-ota/releases/download/v0.2.14/MBUS03_v0.2.14.ota"
   }
 ]

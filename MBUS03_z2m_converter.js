@@ -94,6 +94,7 @@ mbusClusterAttributes.mbusMedium = {name: 'mbusMedium', ID: 0x0101, type: Zcl.Da
 mbusClusterAttributes.deviceCount = {name: 'deviceCount', ID: 0x0102, type: Zcl.DataType.UINT8};
 mbusClusterAttributes.scanProgress = {name: 'scanProgress', ID: 0x0103, type: Zcl.DataType.UINT8};
 mbusClusterAttributes.scanInterval = {name: 'scanInterval', ID: 0x0104, type: Zcl.DataType.UINT8};
+mbusClusterAttributes.mbusReboot = {name: 'mbusReboot', ID: 0x0105, type: Zcl.DataType.UINT8};
 
 // Full cluster definition object. Reused for both the modernExtend registration
 // and the explicit device.addCustomCluster() call. Must include `name`.
@@ -259,6 +260,10 @@ const definition = {
             // Scan trigger (EP11 genOnOff) - firmware auto-resets to OFF
             exposes.binary('scan', ea.ALL, 'ON', 'OFF')
                 .withDescription('Trigger an M-Bus full scan (ON=start, auto-resets to OFF when done)'),
+
+            // Remote reboot button (custom cluster mbusReboot attr)
+            exposes.enum('reboot', ea.SET, ['reboot'])
+                .withDescription('Reboot the device (clears a stuck scan / applies fresh state)'),
 
             // Auto-scan interval (EP2 custom cluster scanInterval, R/W)
             exposes.numeric('scan_interval', ea.STATE_SET)
@@ -493,6 +498,17 @@ const definition = {
             convertGet: async (entity, key, meta) => {
                 const endpoint = meta.device.getEndpoint(MBUS_ENDPOINT);
                 await endpoint.read(MBUS_CLUSTER_ID, [0x0104]);
+            },
+        },
+
+        // Remote reboot: write non-zero to mbusReboot (0x0105); the firmware
+        // restarts ~1s later. Requires firmware >= 0x0002000E.
+        {
+            key: ['reboot'],
+            convertSet: async (entity, key, value, meta) => {
+                const endpoint = meta.device.getEndpoint(MBUS_ENDPOINT);
+                await endpoint.write(MBUS_CLUSTER_ID, {0x0105: {value: 1, type: Zcl.DataType.UINT8}});
+                return {state: {}};
             },
         },
     ],
